@@ -60,7 +60,7 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 
 - [ ] **0. Build the radios** — solder USB + power leads to each BL-M8812EU2, attach antennas.
 - [x] **1. Confirm chipset** on RPi4B — `0bda:a81a` = RTL8812EU. ✅
-- [ ] **2. Build + install `rtl8812eu` driver** on each Pi; blacklist stock driver; verify monitor mode.
+- [x] **2. Build + install `rtl8812eu` driver** — done on RPi4B (loads, monitor mode works). ✅ *RPi5 still pending.*
 - [ ] **3. Install wfb-ng** on both (`scripts/install_gs.sh` on the RPi5).
 - [ ] **4. Generate + distribute keys** (`wfb_keygen` once; copy gs.key / drone.key).
 - [ ] **5. Match config** — same `wifi_channel` + `wifi_region` on both.
@@ -97,6 +97,22 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-06-13 (later) — RPi4B driver VERIFIED ✅
+
+- After the dkms.conf fix, `sudo ./dkms-install.sh` built cleanly against
+  kernel `6.8.0-1057-raspi` (`8812eu.ko.zst` installed, depmod ran).
+- Module didn't auto-load (adapter was plugged in before the driver existed) →
+  `sudo modprobe 8812eu` loaded it and it bound to the device.
+- New interface = **`wlx140a02515687`** (Ubuntu MAC-based name, not `wlan1`).
+  Onboard `wlan0` (brcmfmac, the SSH path) untouched.
+- `ID_NET_DRIVER=rtl88x2eu` → **wfb-ng autodetect will match** (no need to
+  hardcode the interface name).
+- **Monitor mode confirmed**: `iw set type monitor` → `type monitor`, txpower
+  19 dBm. This is the capability the whole project needs. 🎯
+- Noted a chatty dmesg backtrace (`phydm_*`/`rtw_acs_trigger`) during a scan —
+  NetworkManager surveying the card; harmless, will stop under monitor+unmanaged.
+- Promoted INSTALL.md §2.1 to **verified**.
 
 ### 2026-06-13 (later) — Driver build blocked by missing dkms.conf (fixed)
 

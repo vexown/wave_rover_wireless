@@ -41,7 +41,7 @@ Pi's USB port** (TX peaks ~2.5 A).
 
 ## 2. Air side — Raspberry Pi 4B (Ubuntu)
 
-### 2.1 Install the RTL8812EU driver ⏳ *(pending verification)*
+### 2.1 Install the RTL8812EU driver ✅ *(verified — RPi4B, kernel 6.8.0-1057-raspi)*
 
 The driver is **vendored in this repo** at `third_party/rtl8812eu/` (tag
 `v5.15.0.1`, already configured for arm64). No internet clone needed — build it
@@ -56,10 +56,30 @@ sudo apt install -y dkms build-essential bc linux-headers-$(uname -r)
 # Build + install from the vendored copy (run from your checkout of this repo)
 cd third_party/rtl8812eu
 sudo ./dkms-install.sh
+
+# Load it now (it also auto-loads on boot/plug afterwards via udev)
+sudo modprobe 8812eu
 ```
 
-**Verify:** `lsmod | grep 8812eu` shows the module, and `ip -br link` shows a new
-`wlan1` (the onboard `wlan0` Broadcom WiFi stays untouched).
+**Verify:**
+
+```bash
+lsmod | grep 8812eu                                   # module loaded
+ip -br link                                           # new wlxXXXXXXXXXXXX iface appears
+IFACE=$(ls /sys/class/net | grep '^wlx')              # our card (Ubuntu MAC-based name)
+sudo udevadm info /sys/class/net/$IFACE | grep ID_NET_DRIVER   # => rtl88x2eu
+sudo ip link set $IFACE down && sudo iw dev $IFACE set type monitor && sudo ip link set $IFACE up
+iw dev $IFACE info | grep type                        # => "type monitor"
+```
+
+Notes:
+- On Ubuntu the card gets a **MAC-based name** (`wlxXXXXXXXXXXXX`), not `wlan1`.
+  Don't hardcode it — wfb-ng autodetects the card by its driver (`rtl88x2eu`).
+- The onboard `wlan0` (Broadcom, `brcmfmac`) is the SSH path on the RPi4B —
+  leave it alone.
+- A noisy dmesg backtrace during a scan (`phydm_*` / `rtw_acs_trigger`) is the
+  driver reacting to NetworkManager surveying the card. Harmless; goes away once
+  wfb-ng sets the card to monitor mode + NM-unmanaged.
 
 > ⏳ Remaining air-side steps (wfb-ng install, drone profile, camera pipeline)
 > will be added here as we verify them.
