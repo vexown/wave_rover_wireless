@@ -98,6 +98,27 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 
 ## Journal
 
+### 2026-06-13 (later) — Driver build blocked by missing dkms.conf (fixed)
+
+- First `sudo ./dkms-install.sh` on RPi4B failed: *"Could not locate dkms.conf
+  file ... /usr/src/rtl88x2eu-5.15.0.1/dkms.conf does not exist."*
+- Wrong first theory: the upstream script's `cp -r $(pwd) DEST` nesting footgun.
+  Disproved — `find` showed no nested dkms.conf, and a manual clean copy still
+  lacked it.
+- **Real cause:** the vendored driver carried its **own nested `.gitignore`**
+  (a C-dev template) whose line 56 ignores `dkms.conf`. My `git add third_party`
+  honored it and silently omitted `dkms.conf` — so the Pi's `git pull` never had
+  it. Upstream force-adds dkms.conf past that ignore; my commit didn't.
+  (Diagnosed via `git check-ignore -v` and on-disk(720) vs tracked(719) counts.)
+- **Fix:** removed the nested `.gitignore` (we never build in-place; dkms builds
+  in /usr/src) and committed `dkms.conf`. Now 719 on disk == 719 tracked.
+  Recorded in VENDOR.md. Commit `4260847`.
+- **Learning:** when vendoring a repo, check for nested `.gitignore` files —
+  they can silently drop required files from your commit. `git status --ignored`
+  catches this.
+- Next on RPi4B (after push + re-pull): clean the leftover
+  `sudo rm -rf /usr/src/rtl88x2eu-5.15.0.1`, then `sudo ./dkms-install.sh`.
+
 ### 2026-06-13 (later) — Vendored the rtl8812eu driver into the repo
 
 - Goal: be able to rebuild on fresh hardware independent of upstream survival.

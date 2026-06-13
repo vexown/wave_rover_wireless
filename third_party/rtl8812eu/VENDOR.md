@@ -31,8 +31,12 @@ which both Pis in this project use:
 |------|--------|
 | `Makefile` line 181 | `CONFIG_PLATFORM_I386_PC = y` → `= n` |
 | `Makefile` line 183 | `CONFIG_PLATFORM_ARM64_RPI = n` → `= y` |
+| `.gitignore` | **Removed.** Upstream's C-dev template ignored `dkms.conf`, which silently dropped that (required) file from our commit. We build via dkms in `/usr/src`, never in-place here, so the ignore rules served no purpose and only caused breakage. |
 
 No source (`.c`/`.h`) files were modified.
+
+> Note: upstream tracks `dkms.conf` by force-adding it past its own `.gitignore`.
+> When re-vendoring, make sure `dkms.conf` is committed (it's required by `dkms add`).
 
 ## Re-syncing with upstream (if ever needed)
 
