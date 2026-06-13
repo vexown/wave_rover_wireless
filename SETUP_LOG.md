@@ -96,6 +96,17 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 
 ---
 
+## Open items to confirm later
+
+- [ ] **Confirm the radio actually transmits on 5.8 GHz.** No separate test
+  needed — wfb-ng tunes the card to channel 165 (5825 MHz) on startup, so this
+  is verified for free the moment the link carries traffic on 5 GHz. (In bare
+  monitor mode the card defaulted to 2.4 GHz ch.1 only because nothing sets a
+  frequency until wfb-ng does; the RTL8812EU chip is dual-band but this module's
+  RF front-end is tuned for 5 GHz.)
+
+---
+
 ## Journal
 
 ### 2026-06-13 (later) — RPi4B driver VERIFIED ✅
