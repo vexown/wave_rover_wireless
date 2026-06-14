@@ -86,8 +86,70 @@ Notes:
 
 ## 3. Ground station — Raspberry Pi 5 (Raspberry Pi OS Bookworm 64-bit)
 
-⏳ *Pending — flash Bookworm 64-bit Desktop (SSH + WiFi enabled in Imager), then
-driver + `scripts/install_gs.sh`. To be filled in once verified.*
+### 3.1 Flash the OS ✅ *(verified — RPi5)*
+
+Use **Raspberry Pi Imager**: Device = Raspberry Pi 5, OS = **Raspberry Pi OS
+(64-bit) Desktop** (Bookworm). Before writing, open ⚙️ "Edit Settings" and set:
+**hostname**, **enable SSH**, **username/password**, your **home WiFi** (so you
+can SSH in headless over the *onboard* WiFi — the BL-M8812EU2 stays free for
+wfb-ng), and **locale**.
+
+> ⚠️ Must be **64-bit (`aarch64`)**, not 32-bit. The vendored driver's Makefile
+> targets arm64 (`CONFIG_PLATFORM_ARM64_RPI = y`); a 32-bit (armhf) kernel is
+> the wrong platform. Keeping both Pis on arm64 also means **one identical
+> driver build** on both ends.
+
+Boot it, then verify from your machine and on the Pi:
+
+```bash
+ping <hostname>.local && ssh <user>@<hostname>.local   # from your machine
+uname -m                                               # on the Pi => aarch64
+cat /etc/os-release | grep PRETTY                      # => Debian 12 (bookworm)
+```
+
+### 3.2 Install the RTL8812EU driver ✅ *(verified — RPi5, kernel 6.12.75+rpt-rpi-2712)*
+
+Same vendored driver as the air side — **identical build on arm64**. The only
+OS difference from Ubuntu (§2.1) is the **kernel-headers package name**: on
+Raspberry Pi OS it's `raspberrypi-kernel-headers`, not `linux-headers-$(uname -r)`.
+
+```bash
+# Clone this repo (HTTPS — no GitHub SSH key needed on a fresh Pi)
+cd ~ && git clone https://github.com/vexown/wave_rover_wireless.git
+cd wave_rover_wireless
+
+# Build prerequisites (note the Pi-OS-specific headers package)
+sudo apt update
+sudo apt install -y git dkms build-essential bc raspberrypi-kernel-headers
+
+# Confirm the headers match the running kernel (bites people on Bookworm)
+ls -d /lib/modules/$(uname -r)/build      # must exist and resolve
+
+# Build + install from the vendored copy, then load it
+cd third_party/rtl8812eu
+sudo ./dkms-install.sh
+sudo modprobe 8812eu
+```
+
+**Verify:**
+
+```bash
+lsmod | grep 8812eu                                   # module loaded
+ip -br link                                            # new wlan1 appears
+sudo udevadm info /sys/class/net/wlan1 | grep ID_NET_DRIVER   # => rtl88x2eu
+sudo ip link set wlan1 down && sudo iw dev wlan1 set type monitor && sudo ip link set wlan1 up
+iw dev wlan1 info | grep type                         # => "type monitor"
+```
+
+Notes:
+- On **Pi OS the card is named `wlan1`** (not `wlxXXXX` like Ubuntu in §2.1).
+  Either way wfb-ng autodetects by driver (`rtl88x2eu`), so the name doesn't matter.
+- The onboard `wlan0` (Broadcom) is the SSH path on the RPi5 — leave it alone.
+- Bookworm now ships a **6.12** kernel; the vendored driver builds fine on it
+  (the earlier worry about 6.12+ vs the out-of-tree driver didn't materialize).
+
+> ⏳ Remaining ground-side steps (`scripts/install_gs.sh`, gs profile) will be
+> added here as we verify them.
 
 ## 4. Pairing the link (keys + channel)
 

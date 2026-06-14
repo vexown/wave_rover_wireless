@@ -18,7 +18,7 @@ ground station, over a long-range digital radio link (not normal WiFi).
 | Role | Device | OS | Notes |
 |------|--------|----|-------|
 | **Air side** (TX) | Raspberry Pi 4B | Ubuntu (kernel `6.8.0-1057-raspi`) | On the Wave Rover robot. Ubuntu chosen for **ROS2**. Camera Module 3 capture already working here. |
-| **Ground station** (RX) | Raspberry Pi 5 | Raspberry Pi OS Bookworm 64-bit (planned) | Receives + decodes + displays video. **No hardware video decoder** — software-decodes H.264 fine. |
+| **Ground station** (RX) | Raspberry Pi 5 | Raspberry Pi OS Bookworm 64-bit (kernel `6.12.75+rpt-rpi-2712`) | Receives + decodes + displays video. **No hardware video decoder** — software-decodes H.264 fine. |
 | **Radios** ×2 | BL-M8812EU2 | — | Bare USB modules, **Realtek RTL8812EU** chipset. Need soldering (USB + power). |
 
 ## How it works (mental model)
@@ -60,7 +60,7 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 
 - [ ] **0. Build the radios** — solder USB + power leads to each BL-M8812EU2, attach antennas.
 - [x] **1. Confirm chipset** on RPi4B — `0bda:a81a` = RTL8812EU. ✅
-- [x] **2. Build + install `rtl8812eu` driver** — done on RPi4B (loads, monitor mode works). ✅ *RPi5 still pending.*
+- [x] **2. Build + install `rtl8812eu` driver** — done on **both** RPi4B (kernel 6.8) and RPi5 (kernel 6.12); both load + monitor mode works. ✅
 - [ ] **3. Install wfb-ng** on both (`scripts/install_gs.sh` on the RPi5).
 - [ ] **4. Generate + distribute keys** (`wfb_keygen` once; copy gs.key / drone.key).
 - [ ] **5. Match config** — same `wifi_channel` + `wifi_region` on both.
@@ -108,6 +108,29 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-06-14 — RPi5 ground station driver VERIFIED ✅ (both ends at parity)
+
+- Flashed the RPi5 with **Raspberry Pi OS Bookworm 64-bit Desktop** (Imager:
+  hostname `rpi5-waverover`, SSH + onboard WiFi enabled). First attempt was
+  **32-bit by mistake → reflashed 64-bit**: our vendored driver's Makefile
+  targets arm64 (`CONFIG_PLATFORM_ARM64_RPI=y`), so a 32-bit (armhf) kernel is
+  the wrong platform. Bonus: both Pis on arm64 = one identical driver build.
+- Confirmed `uname -m` = **aarch64**, Bookworm 12, kernel
+  **`6.12.75+rpt-rpi-2712`** (newer than the RPi4B's 6.8 — DKMS handles it).
+- Headers package on Pi OS = **`raspberrypi-kernel-headers`** (NOT Ubuntu's
+  `linux-headers-$(uname -r)`). `ls /lib/modules/$(uname -r)/build` resolved → OK.
+- Cloned the repo over **HTTPS** (no GitHub SSH key needed on a fresh Pi),
+  `sudo ./dkms-install.sh` built cleanly against 6.12, `sudo modprobe 8812eu`
+  loaded it: dmesg shows `usbcore: registered new interface driver rtl88x2eu`.
+- Interface = **`wlan1`** here (Pi OS naming), vs `wlx140a02515687` on Ubuntu —
+  doesn't matter, wfb-ng autodetects by driver. Onboard `wlan0` (SSH) untouched.
+- `ID_NET_DRIVER=rtl88x2eu` ✅ and **monitor mode confirmed** (`type monitor`,
+  txpower 19 dBm, same 2.4 GHz/ch1 default until wfb-ng retunes to ch165). 🎯
+- **The earlier Trixie-avoidance worry about 6.12+ vs the out-of-tree driver
+  didn't materialize** — Bookworm now ships 6.12 anyway and the driver built fine.
+- Promoted INSTALL.md **§3.1 + §3.2** to verified (Pi OS driver path documented
+  alongside the Ubuntu path in §2.1). **Both radios now at parity.**
 
 ### 2026-06-13 (later) — RPi4B driver VERIFIED ✅
 
