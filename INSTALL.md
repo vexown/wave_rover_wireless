@@ -245,8 +245,13 @@ options 8812eu rtw_tx_pwr_by_rate=0 rtw_tx_pwr_lmt_enable=0
 
 ```bash
 # 3. Enable + start the gs service (NIC is autodetected by driver -> wlan1).
-sudo systemctl enable --now wifibroadcast@gs
-sudo systemctl status wifibroadcast@gs       # => active (running)
+#    wfb-ng uses TWO units: an umbrella `wifibroadcast.service` (WantedBy
+#    multi-user.target -> starts at boot) and the worker `wifibroadcast@gs`
+#    (WantedBy the umbrella). You must enable BOTH or it won't start on boot.
+sudo systemctl enable wifibroadcast.service   # umbrella (boot -> pulls in @gs)
+sudo systemctl enable wifibroadcast@gs        # worker profile
+sudo systemctl restart wifibroadcast@gs
+sudo systemctl status wifibroadcast@gs        # => active (running)
 ```
 
 **Verify the radio is tuned to 5.8 GHz in monitor mode:**
@@ -258,6 +263,20 @@ wfb-cli gs               # live link dashboard (q to quit); counters 0 until the
 
 `active (running)` + `channel 165 (5825 MHz)` = the receive half of the link is
 done. Counters stay at 0 until the RPi4B air side is transmitting (§4/§5).
+
+**Confirm it survives a reboot** (a GS gets power-cycled, so this matters):
+
+```bash
+sudo reboot
+# reconnect, then with NO manual steps:
+iw dev wlan1 info        # should ALREADY be type monitor, channel 165, 10 dBm
+```
+
+If after reboot the card is in `type managed` instead, the service lost a boot
+race against USB enumeration of `wlan1`. `Restart=on-failure` (5s) usually
+self-heals it within seconds; if not, bind the umbrella to the interface by
+uncommenting/adapting the `Requires=`/`After=sys-subsystem-net-devices-<iface>.device`
+lines in `/lib/systemd/system/wifibroadcast.service`.
 
 ## 4. Pairing the link (keys + channel)
 

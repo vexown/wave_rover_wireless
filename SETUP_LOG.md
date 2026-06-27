@@ -108,6 +108,28 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 
 ## Journal
 
+### 2026-06-27 (later) — GS now boots clean (fixed half-enabled service)
+
+- Reboot test of the RPi5 revealed the GS did **not** come up working:
+  `wlan1` was present (driver auto-loaded on the new 6.12.93 kernel — DKMS
+  persistence confirmed ✅) but in `type managed`, txpower -100 — i.e.
+  NetworkManager had it, the `wifibroadcast@gs` service wasn't running.
+- Cause: wfb-ng uses **two systemd units** — umbrella `wifibroadcast.service`
+  (`WantedBy=multi-user.target`, the boot entry point) + worker
+  `wifibroadcast@gs` (`WantedBy=wifibroadcast.service`). We'd only enabled the
+  worker, never the umbrella, so at boot nothing pulled the chain. Status
+  showed `disabled`.
+- Fix: `systemctl enable wifibroadcast.service` **and**
+  `systemctl enable wifibroadcast@gs`. After reboot, `iw dev wlan1 info` came
+  up `type monitor` / ch165 / 10 dBm with **no** manual steps. GS now boots
+  ready-to-receive. Corrected INSTALL.md §3.4 (the enable step was incomplete)
+  + added a reboot-survival check.
+- Watch item: possible boot race (service starts before USB enumerates
+  `wlan1`). `Restart=on-failure` (5s) self-heals it; didn't trigger here.
+  Robust fix if it ever does: bind umbrella to the
+  `sys-subsystem-net-devices-<iface>.device` via Requires/After (commented
+  example already in `wifibroadcast.service`).
+
 ### 2026-06-27 — wfb-ng installed + GS link UP on the RPi5 ✅
 
 - Built the wfb-ng `.deb` **from our repo** on the RPi5 (`make deb`). Hit one
