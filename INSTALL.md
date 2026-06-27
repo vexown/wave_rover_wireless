@@ -208,12 +208,26 @@ cd /etc && sudo wfb_keygen        # writes /etc/gs.key + /etc/drone.key
 #    can hang on the shell's `>` continuation prompt).
 ```
 
-`/etc/wifibroadcast.cfg`:
+`/etc/wifibroadcast.cfg` — we set the RF/FEC knobs **explicitly** (not relying on
+master.cfg defaults) so they're visible and easy to tune later:
 
 ```ini
 [common]
-wifi_channel = 165     # 5825 MHz, 20 MHz wide. Must MATCH on both ends.
-wifi_region = 'BO'     # CRDA region (BO/GY = max TX power). Must match on both ends.
+wifi_channel = 165     # 5825 MHz (5.8 GHz). Must MATCH the drone.
+wifi_region = 'BO'     # CRDA region. Must MATCH the drone.
+wifi_txpower = 1000    # 8812eu: dBm*100 -> 10 dBm (~10 mW). LOW for close-range
+                       # bench testing; raise for range (e.g. 2000 = 20 dBm).
+                       # NB: GS only TXes the uplink; the drone's txpower governs
+                       # the video downlink. iw confirms this value (10 dBm).
+
+[base]
+bandwidth = 20         # channel width 20 or 40 MHz. Must MATCH the drone.
+
+[video]
+fec_k = 8              # data packets per FEC block
+fec_n = 12             # total per block -> recovers up to 4 lost packets/block.
+                       # NB: FEC is a TX-side setting; the RX takes FEC from the
+                       # drone's session packet, so the DRONE copy is authoritative.
 
 [gs_mavlink]
 peer = 'connect://127.0.0.1:14550'

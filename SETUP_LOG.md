@@ -141,6 +141,15 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 - Promoted INSTALL.md **§3.3 + §3.4** to verified. **Ground station is done** —
   receive half of the link is built and listening. Next: RPi4B air side
   (drone profile + copy drone.key + camera pipeline).
+- **Made RF/FEC knobs explicit** in `/etc/wifibroadcast.cfg` (vs inheriting
+  master.cfg defaults) so they're visible/tunable: `wifi_txpower = 1000`
+  (10 dBm — deliberately low for close-range bench testing), `bandwidth = 20`,
+  `fec_k=8`/`fec_n=12`. After restart, `iw dev wlan1 info` now reads
+  `txpower 10.00 dBm` (the explicit value *is* honored + reported — the "iw is
+  cosmetic" caveat only applied to the unset driver default). Notes for later:
+  GS txpower only drives the (mostly unused) uplink — the **drone's** txpower
+  governs the video downlink; and FEC is TX-side, so the **drone** copy is
+  authoritative (RX derives FEC from the session packet).
 
 ### 2026-06-14 — RPi5 ground station driver VERIFIED ✅ (both ends at parity)
 
