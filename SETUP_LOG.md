@@ -63,8 +63,8 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 - [x] **2. Build + install `rtl8812eu` driver** — done on **both** RPi4B (kernel 6.8) and RPi5 (kernel 6.12); both load + monitor mode works. ✅
 - [x] **3. Install wfb-ng** — **GS (RPi5) done**: built `.deb` from repo, installed, `wifibroadcast@gs` running. ✅ *RPi4B (drone) pending.*
 - [x] **4. Generate + distribute keys** — `wfb_keygen` run once on the GS (`/etc/gs.key` + `/etc/drone.key`). ✅ *drone.key still to copy to RPi4B.*
-- [x] **5. Match config** — GS on `wifi_channel=165` / `wifi_region='BO'`. ✅ *RPi4B must match.*
-- [ ] **6. Bench test the radio** with a test pattern; watch `wfb-cli gs` for RSSI/packets.
+- [x] **5. Match config** — both ends on `wifi_channel=165` / `wifi_region='BO'` / `bandwidth=20`. ✅
+- [x] **6. Bench test the radio** — **LINK UP**: `wfb-cli gs` shows RSSI ~−38/−40 dBm, dloss 0; test-pattern video confirmed drone→GS, color bars on the GS screen. ✅
 - [ ] **7. Wire in real Camera Module 3** pipeline on the RPi4B.
 - [ ] **8. Mount on the robot** — antennas, power, range.
 
@@ -107,6 +107,50 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-06-28 — 🎉 FIRST LIGHT: full wireless video link works end to end
+
+- **Air side (RPi4B) brought up:** built wfb-ng `.deb` from the repo on Ubuntu
+  24.04 (`0~noble`), installed it; copied `drone.key` from the GS (verified
+  bit-identical via `sha256sum` — `093e3b8a…`); wrote the drone
+  `/etc/wifibroadcast.cfg` (drone profile, ch165/BO/bw20 matching the GS, FEC
+  authoritative, `[drone_video] peer=listen://0.0.0.0:5602`); enabled BOTH
+  systemd units (lesson from the GS) with the `drone` profile. Service came up
+  `active (running)`, card `wlx140a02515687` in monitor mode, ch165, 10 dBm.
+- **Link confirmed:** `wfb-cli gs` on the RPi5 showed the **gs tunnel** RX panel
+  with two antenna lines at **RSSI ~−38/−40 dBm**, `dloss 0`, sess decrypting —
+  i.e. clean bidirectional RF + matched-key pairing. (video/mavlink panels at 0,
+  expected — no source yet.)
+- **Video end to end:** GStreamer `videotestsrc → x264enc → rtph264pay →
+  udpsink:5602` on the drone lit up the GS **video** panel (recv pkt/s, ~2 Mbit/s).
+  Then `udpsrc:5600 → rtph264depay → avdec_h264 → autovideosink` (DISPLAY=:0)
+  on the RPi5 put the **SMPTE color bars on the portable screen.** 📺 First light!
+- **Copy-paste gotcha (again):** long single-line `gst-launch` pipelines get
+  chopped by terminal line-wrap on paste (newlines land mid-command, `!`
+  separators become bash operators → `!: command not found`, `not-linked`).
+  Fixes: keep it on ONE physical line, or backslash-split into short lines, or
+  put it in a script. Documented in INSTALL.md §5.
+- Promoted INSTALL.md **§2.2/§2.3** (air-side wfb-ng + drone profile), **§4**
+  (pairing) and **§5** (video pipeline, test pattern) to verified. The core link
+  is DONE — next is swapping the test pattern for the real Camera Module 3.
+
+### 2026-06-27 (later) — RPi4B unbootable after apt upgrade — recovered (no reflash)
+
+- After `apt full-upgrade` (~200 pkgs, mostly ROS Jazzy — NOT a kernel bump) +
+  reboot, the RPi4B was unreachable (solid green ACT LED, no SSH; WiFi was its
+  only path since eth0 is NO-CARRIER).
+- Diagnosed by reading the SD card on the (Linux) laptop, *not* reflashing:
+  dpkg.log showed the upgrade **completed** (not interrupted); `vmlinuz`+`initrd`
+  present and correct size (not a missing-kernel); disk not full. **Smoking gun:
+  600+ `FSCK*.REC` fragments in the FAT boot partition = filesystem corruption.**
+- Fix: `fsck.vfat -a -w /dev/sdc1` (boot) + `fsck.ext4 -f -y /dev/sdc2` (root).
+  Boot-partition corruption was the blocker; ext4 damage was confined to
+  disposable `~/.ros/log` (a year of run logs). Re-inserted → **booted fine**,
+  same kernel `6.8.0-1057-raspi`, radio (8812eu) intact.
+- **Lessons:** corruption ≠ data loss (the *index* was scrambled, not the bytes;
+  fsck rebuilds it from intact data — look before you reflash). Heavy SD logging
+  (`~/.ros/log`) + a write storm can corrupt cards; watch this card for repeats.
+  Keep kernel headers tracking the kernel for DKMS (separate earlier lesson).
 
 ### 2026-06-27 (later) — GS now boots clean (fixed half-enabled service)
 

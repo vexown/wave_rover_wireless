@@ -81,8 +81,67 @@ Notes:
   driver reacting to NetworkManager surveying the card. Harmless; goes away once
   wfb-ng sets the card to monitor mode + NM-unmanaged.
 
-> ⏳ Remaining air-side steps (wfb-ng install, drone profile, camera pipeline)
-> will be added here as we verify them.
+### 2.2 Build + install wfb-ng (from this repo) ✅ *(verified — RPi4B, Ubuntu 24.04)*
+
+Identical flow to the GS (§3.3); the build-dep package names are the same on
+Ubuntu `noble` as on Pi OS `bookworm`. The build is **slower on the RPi4B**
+(Cortex-A72) — just let it run.
+
+```bash
+sudo apt update
+sudo apt install -y build-essential libpcap-dev libsodium-dev libevent-dev \
+  libgstrtspserver-1.0-dev gstreamer1.0-plugins-base \
+  python3-all python3-all-dev python3-pip python3-venv debhelper dh-python \
+  fakeroot lsb-release python3-twisted python3-pyroute2 python3-msgpack \
+  python3-jinja2 python3-yaml python3-serial python3-future
+
+cd ~/wave_rover_wireless
+make deb
+sudo apt install -y ./deb_dist/wfb-ng_*_arm64.deb     # package tagged 0~noble
+```
+
+### 2.3 Configure + start the drone (air) profile ✅ *(verified — RPi4B)*
+
+The key pair was generated once on the GS (§3.4). Copy the **`drone.key`** half
+here (relay through a machine that can SSH both Pis):
+
+```bash
+# on a host with SSH to both:
+scp rpi5-gs:/etc/drone.key /tmp/drone.key && scp /tmp/drone.key rpi4b:/tmp/drone.key
+# on the RPi4B:
+sudo install -o root -g root -m 644 /tmp/drone.key /etc/drone.key && rm /tmp/drone.key
+# verify it's the EXACT matched key (one bit off = silent link):
+sudo sha256sum /etc/drone.key      # must equal the GS's /etc/drone.key hash
+```
+
+`/etc/wifibroadcast.cfg` (drone) — RF settings **must match the GS** (§3.4);
+differences are the `drone_video` input and that FEC is authoritative here:
+
+```ini
+[common]
+wifi_channel = 165     # MUST MATCH the GS.
+wifi_region = 'BO'     # MUST MATCH the GS.
+wifi_txpower = 1000    # 10 dBm, low for bench. THIS one drives the video downlink.
+
+[base]
+bandwidth = 20         # MUST MATCH the GS.
+
+[video]
+fec_k = 8              # authoritative here (FEC is a TX-side setting)
+fec_n = 12
+
+[drone_video]
+peer = 'listen://0.0.0.0:5602'   # camera/encoder pushes H.264 in here
+```
+
+```bash
+# Enable BOTH units (umbrella + worker), drone profile:
+sudo systemctl enable wifibroadcast.service
+sudo systemctl enable wifibroadcast@drone
+sudo systemctl start wifibroadcast@drone
+sudo systemctl status wifibroadcast@drone        # => active (running), runs wfb_tx -u 5602
+iw dev "$(ls /sys/class/net | grep '^wlx')" info  # => type monitor, channel 165, 10 dBm
+```
 
 ## 3. Ground station — Raspberry Pi 5 (Raspberry Pi OS Bookworm 64-bit)
 
@@ -278,11 +337,51 @@ self-heals it within seconds; if not, bind the umbrella to the interface by
 uncommenting/adapting the `Requires=`/`After=sys-subsystem-net-devices-<iface>.device`
 lines in `/lib/systemd/system/wifibroadcast.service`.
 
-## 4. Pairing the link (keys + channel)
+## 4. Pairing the link (keys + channel) ✅ *(verified)*
 
-⏳ *Pending — `wfb_keygen` once, distribute gs.key / drone.key, match
-`wifi_channel` + `wifi_region` on both ends.*
+Already covered inline above, but the rules in one place:
+- **Keys:** `wfb_keygen` **once** (we ran it on the GS, §3.4). `gs.key` stays on
+  the GS, `drone.key` goes to the drone (§2.3). Both must be from the *same*
+  generation — verify with matching `sha256sum`.
+- **Channel/region/bandwidth:** `wifi_channel=165`, `wifi_region='BO'`,
+  `bandwidth=20` must be **identical** on both ends or the radios can't talk.
 
-## 5. Video pipeline
+**Verify the live link** — on the GS run `wfb-cli gs`: with the drone's service
+up you should see the **gs tunnel** panel show an antenna line with a real
+**RSSI** (e.g. −38 dBm) and packets moving + `dloss 0`. That confirms RF + key
+pairing end to end (the `video` panel stays `[No data]` until §5 feeds it).
 
-⏳ *Pending — air-side camera→encode→UDP:5602; ground-side UDP:5600→player.*
+## 5. Video pipeline ✅ *(verified with a test pattern)*
+
+End-to-end check using a GStreamer test pattern (no camera needed yet).
+
+**Air side (RPi4B)** — push H.264/RTP into the drone's video input (port 5602):
+
+```bash
+gst-launch-1.0 videotestsrc ! video/x-raw,width=640,height=480,framerate=30/1 \
+  ! x264enc tune=zerolatency bitrate=2000 key-int-max=30 \
+  ! rtph264pay config-interval=1 pt=96 ! udpsink host=127.0.0.1 port=5602
+```
+
+**Ground station (RPi5)** — decode + display what arrives on port 5600. Run on
+the Pi's local screen; over SSH prefix with `DISPLAY=:0` (XWayland). **Keep it
+one physical line** — terminals insert real newlines at wrap points and break
+the `!` separators:
+
+```bash
+DISPLAY=:0 gst-launch-1.0 udpsrc port=5600 caps=application/x-rtp,media=video,encoding-name=H264,payload=96 ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink sync=false
+```
+
+Needs `gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav`
+on the GS (`avdec_h264`). Result: the test pattern (SMPTE color bars) appears on
+the GS screen. While it runs, `wfb-cli gs`'s **video** panel shows `recv` pkt/s
+climbing and `Flow: ~2000 kbit/s`.
+
+- If GS shows `could not open display` (Wayland blocking an SSH-launched window),
+  use `WAYLAND_DISPLAY=wayland-0` + `waylandsink` instead of `DISPLAY=:0` +
+  `autovideosink`, or run the pipeline from a terminal on the Pi's desktop.
+- `x264enc` is software encode (fine for a test). The real camera step swaps
+  `videotestsrc`/`x264enc` for the Camera Module 3 capture + (HW) encode.
+
+> ⏳ Next: replace the test pattern with the real **Camera Module 3** pipeline on
+> the air side, then tune latency/FEC/bitrate. To be filled in once verified.
