@@ -61,9 +61,9 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 - [ ] **0. Build the radios** — solder USB + power leads to each BL-M8812EU2, attach antennas.
 - [x] **1. Confirm chipset** on RPi4B — `0bda:a81a` = RTL8812EU. ✅
 - [x] **2. Build + install `rtl8812eu` driver** — done on **both** RPi4B (kernel 6.8) and RPi5 (kernel 6.12); both load + monitor mode works. ✅
-- [ ] **3. Install wfb-ng** on both (`scripts/install_gs.sh` on the RPi5).
-- [ ] **4. Generate + distribute keys** (`wfb_keygen` once; copy gs.key / drone.key).
-- [ ] **5. Match config** — same `wifi_channel` + `wifi_region` on both.
+- [x] **3. Install wfb-ng** — **GS (RPi5) done**: built `.deb` from repo, installed, `wifibroadcast@gs` running. ✅ *RPi4B (drone) pending.*
+- [x] **4. Generate + distribute keys** — `wfb_keygen` run once on the GS (`/etc/gs.key` + `/etc/drone.key`). ✅ *drone.key still to copy to RPi4B.*
+- [x] **5. Match config** — GS on `wifi_channel=165` / `wifi_region='BO'`. ✅ *RPi4B must match.*
 - [ ] **6. Bench test the radio** with a test pattern; watch `wfb-cli gs` for RSSI/packets.
 - [ ] **7. Wire in real Camera Module 3** pipeline on the RPi4B.
 - [ ] **8. Mount on the robot** — antennas, power, range.
@@ -98,16 +98,49 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 
 ## Open items to confirm later
 
-- [ ] **Confirm the radio actually transmits on 5.8 GHz.** No separate test
-  needed — wfb-ng tunes the card to channel 165 (5825 MHz) on startup, so this
-  is verified for free the moment the link carries traffic on 5 GHz. (In bare
-  monitor mode the card defaulted to 2.4 GHz ch.1 only because nothing sets a
-  frequency until wfb-ng does; the RTL8812EU chip is dual-band but this module's
-  RF front-end is tuned for 5 GHz.)
+- [x] **Confirm the radio operates on 5.8 GHz.** ✅ **GS side confirmed** —
+  with `wifibroadcast@gs` running, `iw dev wlan1 info` shows
+  `channel 165 (5825 MHz), type monitor`. wfb-ng retunes the card to 5 GHz on
+  startup (vs the bare 2.4 GHz/ch1 default before any service runs). Full
+  TX-over-the-air confirmation still comes once the air side transmits.
 
 ---
 
 ## Journal
+
+### 2026-06-27 — wfb-ng installed + GS link UP on the RPi5 ✅
+
+- Built the wfb-ng `.deb` **from our repo** on the RPi5 (`make deb`). Hit one
+  missing build-dep: `dpkg-checkbuilddeps: error: unmet build dependencies:
+  python3-all-dev` → installed `python3-all-dev`, rebuilt, got
+  `wfb-ng_26.6.13.56077-0~bookworm_arm64.deb`. Installed via
+  `apt install ./deb_dist/...deb` (pulled `socat`). (Harmless apt note about
+  "unsandboxed download ... Permission denied" when installing from $HOME.)
+- Package ships `/etc/default/wifibroadcast` (NIC autodetect) + the systemd
+  units, but **not** `/etc/wifibroadcast.cfg` — we create that. Did the
+  config half of `scripts/install_gs.sh` by hand (since we installed our own
+  .deb, not the apt-repo one): `wfb_keygen` in /etc (gs.key + drone.key),
+  wrote `/etc/wifibroadcast.cfg` (gs profile, ch165, region BO, video→5600),
+  `/etc/modprobe.d/wfb.conf`.
+- **Heredoc-over-SSH gotcha:** `sudo tee <<'EOF'` pastes kept hanging on the
+  shell `>` continuation prompt → switched to `sudo nano`. Noted in INSTALL.md.
+- **Kernel-update / DKMS gotcha (the big lesson):** service first failed with
+  `wfb-server: --wlans: expected at least one argument` → `wfb-nics` returned
+  empty → no `wlan1`. Cause: `apt upgrade` over the break moved the kernel
+  6.12.75 → 6.12.87, but DKMS hadn't rebuilt 8812eu for it (headers/kernel
+  drift), so `modprobe 8812eu` gave *"Module not found in
+  /lib/modules/6.12.87..."*. Fix: headers for the running kernel were present,
+  so `sudo dkms autoinstall` rebuilt the module for 6.12.87, `modprobe` loaded
+  it, `wlan1` returned. **Keep updating, just keep headers in sync; recover with
+  `dkms autoinstall`.** Documented as a callout in INSTALL.md §3.2.
+- `systemctl restart wifibroadcast@gs` → **`active (running)`**: it spawned
+  `wfb-server --profiles gs --wlans wlan1`, the `wfb_rx ... -u 5600 -K
+  /etc/gs.key` video receiver, + mavlink/tunnel helpers. Enabled on boot.
+- **5.8 GHz confirmed (RX side):** `iw dev wlan1 info` →
+  `channel 165 (5825 MHz), type monitor`, txpower 19 dBm. Closed that open item.
+- Promoted INSTALL.md **§3.3 + §3.4** to verified. **Ground station is done** —
+  receive half of the link is built and listening. Next: RPi4B air side
+  (drone profile + copy drone.key + camera pipeline).
 
 ### 2026-06-14 — RPi5 ground station driver VERIFIED ✅ (both ends at parity)
 

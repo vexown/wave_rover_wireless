@@ -148,8 +148,102 @@ Notes:
 - Bookworm now ships a **6.12** kernel; the vendored driver builds fine on it
   (the earlier worry about 6.12+ vs the out-of-tree driver didn't materialize).
 
-> ⏳ Remaining ground-side steps (`scripts/install_gs.sh`, gs profile) will be
-> added here as we verify them.
+> ⚠️ **Kernel updates and DKMS.** The driver is an out-of-tree module built for
+> one exact kernel version. DKMS is supposed to rebuild it automatically when
+> `apt` installs a new kernel — **but only if the matching kernel headers are
+> present at that moment.** On Pi OS the kernel image and headers are separate
+> packages and can drift, so after an `apt upgrade` you may boot a new kernel
+> with **no driver** (symptom: `wlan1` gone, `modprobe 8812eu` →
+> `Module ... not found in directory /lib/modules/<new-ver>`). Recovery:
+>
+> ```bash
+> sudo apt install -y "linux-headers-$(uname -r)"   # headers for the RUNNING kernel
+> sudo dkms autoinstall                              # rebuild the module for it
+> sudo modprobe 8812eu
+> ```
+>
+> `dkms status` should then list the module as `installed` for your current
+> `uname -r`. **Do keep updating the Pis** — just make sure the headers track
+> the kernel so DKMS can do its job unattended.
+
+### 3.3 Build + install wfb-ng (from this repo) ✅ *(verified — RPi5)*
+
+No `make install`; on Debian/Pi OS you build a `.deb` from this repo and
+`apt install` it (keeps us self-contained — no external apt repo).
+
+```bash
+# Build dependencies
+sudo apt update
+sudo apt install -y build-essential libpcap-dev libsodium-dev libevent-dev \
+  libgstrtspserver-1.0-dev gstreamer1.0-plugins-base \
+  python3-all python3-all-dev python3-pip python3-venv debhelper dh-python \
+  fakeroot lsb-release python3-twisted python3-pyroute2 python3-msgpack \
+  python3-jinja2 python3-yaml python3-serial python3-future
+
+# Build the .deb (compiles the C binaries, then packages via stdeb — needs internet)
+cd ~/wave_rover_wireless
+make deb
+
+# Install it via apt (pulls runtime deps like socat). Ignore the harmless
+# "Download is performed unsandboxed ... Permission denied" apt note.
+sudo apt install -y ./deb_dist/wfb-ng_*_arm64.deb
+```
+
+> `python3-all-dev` is required — the generated Debian package build-depends on
+> it (`dpkg-checkbuilddeps: error: unmet build dependencies: python3-all-dev`)
+> and the build aborts without it.
+
+The package drops `/etc/default/wifibroadcast` (NIC autodetect) and the
+`wifibroadcast@.service` systemd unit, but **not** `/etc/wifibroadcast.cfg` —
+you create that next.
+
+### 3.4 Configure + start the ground station ✅ *(verified — RPi5)*
+
+```bash
+# 1. Generate the matched key pair ONCE (here on the GS).
+#    Keep gs.key here; drone.key gets copied to the air side (§4).
+cd /etc && sudo wfb_keygen        # writes /etc/gs.key + /etc/drone.key
+
+# 2. Create /etc/wifibroadcast.cfg  (use `sudo nano` — heredoc paste over SSH
+#    can hang on the shell's `>` continuation prompt).
+```
+
+`/etc/wifibroadcast.cfg`:
+
+```ini
+[common]
+wifi_channel = 165     # 5825 MHz, 20 MHz wide. Must MATCH on both ends.
+wifi_region = 'BO'     # CRDA region (BO/GY = max TX power). Must match on both ends.
+
+[gs_mavlink]
+peer = 'connect://127.0.0.1:14550'
+
+[gs_video]
+peer = 'connect://127.0.0.1:5600'   # local video sink on the RPi5
+```
+
+`/etc/modprobe.d/wfb.conf`:
+
+```ini
+options cfg80211 ieee80211_regdom=RU
+options 8812eu rtw_tx_pwr_by_rate=0 rtw_tx_pwr_lmt_enable=0
+```
+
+```bash
+# 3. Enable + start the gs service (NIC is autodetected by driver -> wlan1).
+sudo systemctl enable --now wifibroadcast@gs
+sudo systemctl status wifibroadcast@gs       # => active (running)
+```
+
+**Verify the radio is tuned to 5.8 GHz in monitor mode:**
+
+```bash
+iw dev wlan1 info        # => type monitor, channel 165 (5825 MHz)
+wfb-cli gs               # live link dashboard (q to quit); counters 0 until the air side TXes
+```
+
+`active (running)` + `channel 165 (5825 MHz)` = the receive half of the link is
+done. Counters stay at 0 until the RPi4B air side is transmitting (§4/§5).
 
 ## 4. Pairing the link (keys + channel)
 
