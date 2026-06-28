@@ -82,10 +82,12 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 - [ ] **8. Make it hands-free** — `cam.sh` as a systemd service (auto-stream on
   power-up); resolve ROS-camera vs FPV coexistence; optional GS autostart.
 - [ ] **9. Reduce glass-to-glass latency** — currently ~1–2 s (fine for a land
-  robot, but a tuned wfb link is <200 ms). Smells like buffer accumulation:
-  suspect GS `avdec_h264`/`autovideosink` buffering + growing queues; also
-  encoder GOP. Try `queue leaky=downstream max-size-buffers=1`, a low-latency
-  sink, `avdec_h264` low-delay, shorter intra. (Check if lag *grows* over time.)
+  robot, but a tuned wfb link is <200 ms). **Confirmed stable, not growing** →
+  it's **fixed decode/display buffering on the GS**, not queue accumulation (rules
+  out the air side / RF). First moves are GS-only: force a low-latency sink
+  (`glimagesink`/`kmssink`, `sync=false`) instead of `autovideosink`, put
+  `avdec_h264` in low-delay/no-reorder mode, add `queue leaky=downstream
+  max-size-buffers=1` before the sink. (Encoder GOP is a secondary lever.)
 - [ ] **10. Mount on the robot** — antennas, power, range. Clone SD to a fresh card.
 
 ## Radio wiring reference (BL-M8812EU2)
