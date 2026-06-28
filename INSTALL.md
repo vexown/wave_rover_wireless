@@ -587,6 +587,23 @@ ssh rpi5-waverover 'wfb-cli gs'    # live RSSI, pkt/s, FEC, loss
 Tune bitrate/resolution/FPS in `~/cam.sh`; FEC / txpower / channel in
 `/etc/wifibroadcast.cfg` (must stay **matched** across both ends — see §4).
 
+**TX radio thermal check** (run on the air-side RPi4B). The RTL8812EU reports a
+per-PA-path temperature; the driver's overheat warning is **60 °C**:
+
+```bash
+watch -n2 'sudo cat /proc/net/rtl88x2eu/$(ls /sys/class/net | grep ^wlx)/thermal_state'
+# each line = one antenna path; read the `temperature:` field (°C)
+```
+
+- **< 55 °C** comfortable · **55–60 °C** warm (add airflow for sustained TX) ·
+  **≥ 60 °C** overheat warning — PA may throttle/degrade; improve cooling or drop
+  `wifi_txpower`.
+- ⚠️ **Heat scales hard with `wifi_txpower`.** At the bench setting (1000 = 10 dBm)
+  both paths sat at **47–49 °C under live video TX** — lots of margin. **Re-check
+  at your operational power** (20–30 dBm for range) — that's the reading that
+  actually validates cooling for flying. Log a temp at each power level during
+  range testing.
+
 > ⏳ **Next session — make it hands-free:** wrap `cam.sh` in a systemd service on
 > the robot (free the camera from ROS first, §6.4) so video streams on power-up,
 > and optionally autostart `play.sh` on the GS desktop. Then you just power the
