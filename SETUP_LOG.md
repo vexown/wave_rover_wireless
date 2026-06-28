@@ -55,6 +55,17 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
   already solved there (pipeline to be documented in the video step).
 - ⚠️ **Never power/transmit the radio without an antenna attached** — can
   damage the RF power amplifier.
+- **A robot's SD card must tolerate power cuts.** The FAT boot partition has no
+  journaling and corrupted twice on hard power-off. Mount **`/boot/firmware`
+  read-only** (it's static at runtime) — zero writes = nothing to corrupt.
+  Verified against a real battery-dead cut. (Don't "remember to shut down
+  cleanly" — solve it in the filesystem.)
+- **Camera Module 3 on Ubuntu needs a source-built libcamera/rpicam-apps** (distro
+  `0.2.0` is blind to the IMX708) and an **explicit `dtoverlay=imx708`**. The
+  source libcamera in `/usr` is fragile to apt upgrades overwriting its IPA
+  module — symptom "No cameras available!"; fix by reinstalling source libcamera.
+- **The camera is single-owner.** ROS (`ros2_camera_feed.service`) and the FPV
+  pipeline can't both hold it — disable one. Coexistence design still open.
 
 ## Plan / progress
 
@@ -65,8 +76,12 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 - [x] **4. Generate + distribute keys** — `wfb_keygen` run once on the GS (`/etc/gs.key` + `/etc/drone.key`). ✅ *drone.key still to copy to RPi4B.*
 - [x] **5. Match config** — both ends on `wifi_channel=165` / `wifi_region='BO'` / `bandwidth=20`. ✅
 - [x] **6. Bench test the radio** — **LINK UP**: `wfb-cli gs` shows RSSI ~−38/−40 dBm, dloss 0; test-pattern video confirmed drone→GS, color bars on the GS screen. ✅
-- [ ] **7. Wire in real Camera Module 3** pipeline on the RPi4B.
-- [ ] **8. Mount on the robot** — antennas, power, range.
+- [x] **7. Wire in real Camera Module 3** pipeline on the RPi4B — **LIVE**: IMX708
+  → H.264 → RTP → wfb → GS screen, smooth 720p30 (`~/cam.sh` + `~/play.sh`, in
+  `fpv/`). Also hardened the SD against power cuts (read-only `/boot/firmware`). ✅
+- [ ] **8. Make it hands-free** — `cam.sh` as a systemd service (auto-stream on
+  power-up); resolve ROS-camera vs FPV coexistence; optional GS autostart.
+- [ ] **9. Mount on the robot** — antennas, power, range. Clone SD to a fresh card.
 
 ## Radio wiring reference (BL-M8812EU2)
 
@@ -107,6 +122,71 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-06-28 (later) — 🎥 REAL CAMERA over the link + SD card made power-cut-proof
+
+The big day: live **Camera Module 3** video over the wfb link (smooth 720p30,
+crisp). Getting there meant recovering from a 2nd SD corruption and peeling four
+nested camera problems.
+
+- **2nd SD corruption (again the FAT boot partition).** Robot wouldn't boot after
+  power-cycling. Read the card on the laptop: `config.txt` gave **`Input/output
+  error`** (a *hardware* read fault, not just logical scramble), 624 `FSCK*.REC`
+  files, dirty bit set. `fsck.vfat -a -w` truncated the unreadable `config.txt`
+  to 0 bytes; restored it from a backup; `fsck.ext4 -f -y` cleaned the root
+  (damage again confined to `~/.ros/log`). Booted fine.
+- **Root cause + the fix.** Both bricks share one fingerprint: the **FAT boot
+  partition** corrupts (no journaling) on **power cuts** — and a robot gets its
+  power *cut*, not `poweroff`'d. `config.txt` never changes at runtime, so we
+  mounted **`/boot/firmware` read-only** (`defaults,ro` in fstab). It's not
+  "fewer writes," it's **zero** (no dirty bit / FAT / FSINFO / atime) → a power
+  cut has nothing to tear. **Proven the same session:** the robot battery died
+  mid-work (hard cut) and it **booted clean** — boot partition still `ro`,
+  `config.txt` intact, no fsck. That failure mode is closed. (Aging card is still
+  suspect — plan to `ddrescue`-clone to a fresh card; overlayroot for the ext4
+  root is a later upgrade. The user power-cuts the robot by design, so this had
+  to be solved in the *filesystem*, not by "remember to shut down cleanly.")
+- **Camera was dead — four stacked causes, all recovery fallout:**
+  1. **Wrong port.** The ribbon was in the **DSI** (display) socket, not **CSI**
+     (camera) — identical unlabeled FFCs on the Pi 4B. Kernel saw no sensor.
+     Moved to CSI (between HDMI and the 3.5 mm jack) + set explicit
+     `dtoverlay=imx708` (Ubuntu's `camera_auto_detect` is unreliable). → `dmesg`
+     shows `imx708 ... module ID 0x0301`, a `unicam` media device appears.
+  2. **Wiped binaries.** SD corruption deleted `/usr/local/bin/rpicam-*` (the
+     `libcamera-*` symlinks dangled → "No such file or directory" on a file that
+     `find` located). The **source build dir + libcamera 0.5.0 survived**, so
+     just `meson compile -C ~/libcamera_build/rpicam-apps/build` + `meson install`.
+  3. **Stale IPA module.** Then libcamera said **"No cameras available!"** despite
+     the kernel seeing the sensor. Cause: the apt libcamera `0.2.0` (pulled in by
+     the earlier ROS `full-upgrade`) had overwritten the source `ipa_rpi_vc4.so`
+     (Pi 4's ISP) with its `0.2.0` version — ABI/signature mismatch, libcamera
+     rejects it. Fix: reinstall source libcamera (`ninja -C
+     ~/libcamera_build/libcamera/build install` — it recompiled + re-signed the
+     `0.5.x` IPA). → `rpicam-hello --list-cameras` finally lists the IMX708.
+  4. **ROS owned the camera.** `rpicam-vid` then hit *"Pipeline handler in use by
+     another process."* The robot's `ros2_camera_feed.service` auto-starts and
+     grabs the single-owner camera. `systemctl disable --now` it for FPV.
+- **Streaming.** Wrote `~/cam.sh` (rpicam-vid → h264parse → rtph264pay →
+  udpsink:5602, `--rotation 180` for the upside-down mount) and `~/play.sh`
+  (udpsrc:5600 → jitterbuffer → depay → avdec_h264 → autovideosink). Both saved
+  to `fpv/` in the repo.
+- **SSH-backgrounding gotcha.** Launching the persistent GStreamer processes
+  *through* one-shot `ssh '... &'`/`setsid` calls kept dropping the channel
+  (**exit 255**, process didn't survive). Foreground `ssh` runs everything else
+  fine; the durable players just need a **held interactive session** (or a
+  systemd service). User ran `play.sh` (GS) and `cam.sh` (air) in their own
+  terminals → instant live feed.
+- **Link health with real video:** session negotiated **FEC K=8/N=12**, RSSI
+  **−33 dB**, packet loss trivial (a startup blip; the "1 lost" lines are the
+  telemetry tunnel, not video). Smooth and crisp end to end.
+- Promoted INSTALL.md **§2.4** (read-only boot), **§6** (real camera: port, IMX708
+  overlay, libcamera/rpicam-apps build + the IPA-clash fix, ROS conflict,
+  `cam.sh`), **§7** (daily-use quick-start) to verified.
+- **Open items:** (a) ROS-camera vs FPV **coexistence** design (one camera, one
+  owner); (b) **auto-start** `cam.sh` as a systemd service so the robot streams
+  on power-up (+ optional GS autostart) — next session; (c) **clone the SD** to a
+  fresh card (it's showing hardware read faults); (d) overlayroot for full
+  power-cut immunity.
 
 ### 2026-06-28 — 🎉 FIRST LIGHT: full wireless video link works end to end
 

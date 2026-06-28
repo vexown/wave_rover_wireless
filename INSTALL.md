@@ -143,6 +143,42 @@ sudo systemctl status wifibroadcast@drone        # => active (running), runs wfb
 iw dev "$(ls /sys/class/net | grep '^wlx')" info  # => type monitor, channel 165, 10 dBm
 ```
 
+### 2.4 Make the SD card power-cut-proof (read-only `/boot/firmware`) ✅ *(verified — survived a real battery-dead power cut)*
+
+A robot gets its power **cut** (battery dies, kill switch) — not a clean
+`poweroff`. The FAT **boot partition** (`/boot/firmware`, holds `config.txt`) has
+**no journaling**, so a power cut mid-write scrambles its allocation table. This
+bricked the RPi4B **twice** (corrupt/unreadable `config.txt` → solid green LED,
+no boot; recovered each time by `fsck` on the card in a laptop).
+
+The fix: mount `/boot/firmware` **read-only**. Nothing writes there at runtime
+(`config.txt`, overlays and the kernel are static between deliberate updates), so
+a power cut has nothing to tear. This *eliminates* that whole failure mode — it's
+not "fewer writes," it's **zero** writes (no dirty bit, no FAT/FSINFO, no atime).
+
+```bash
+sudo cp /etc/fstab /etc/fstab.bak                              # backup
+sudo sed -i '/\/boot\/firmware/ s/defaults/defaults,ro/' /etc/fstab
+sudo findmnt --verify                                          # expect 0 errors
+sudo systemctl daemon-reload
+sudo mount -o remount,ro /boot/firmware                        # apply now
+findmnt -no OPTIONS /boot/firmware | tr ',' '\n' | grep -x ro  # confirms: ro
+```
+
+**To edit `config.txt` later** (camera/kernel tweaks) unlock it briefly:
+
+```bash
+sudo mount -o remount,rw /boot/firmware
+sudo nano /boot/firmware/config.txt
+sudo mount -o remount,ro /boot/firmware
+```
+
+> Verified the hard way: the robot battery died mid-session (hard power cut) and
+> the Pi **booted clean** — `/boot/firmware` still `ro`, `config.txt` intact, no
+> fsck. The ext4 *root* is journaled so it self-recovers; for full power-cut
+> immunity an **overlayroot** read-only root is the next-session upgrade. The GS
+> benefits from the same `ro` boot trick if it's ever hard-cut.
+
 ## 3. Ground station — Raspberry Pi 5 (Raspberry Pi OS Bookworm 64-bit)
 
 ### 3.1 Flash the OS ✅ *(verified — RPi5)*
@@ -383,5 +419,175 @@ climbing and `Flow: ~2000 kbit/s`.
 - `x264enc` is software encode (fine for a test). The real camera step swaps
   `videotestsrc`/`x264enc` for the Camera Module 3 capture + (HW) encode.
 
-> ⏳ Next: replace the test pattern with the real **Camera Module 3** pipeline on
-> the air side, then tune latency/FEC/bitrate. To be filled in once verified.
+## 6. Real Camera Module 3 over the link (air side) ✅ *(verified — live feed on the GS, smooth 720p30, crisp)*
+
+Replaces the §5 test pattern with the actual IMX708 (Camera Module 3) capture.
+
+### 6.1 Connect the camera to the CORRECT port
+
+On the Pi 4B the **DSI (display)** and **CSI (camera)** connectors are identical,
+unlabeled FFC sockets — trivially easy to swap (we did, and the kernel saw
+nothing for it). The **CAMERA / CSI** port is the one **between the HDMI ports
+and the 3.5 mm jack** (NOT the one by the GPIO header — that's DSI). Power off
+first; on the Pi end the **silver contacts face the HDMI** side; seat fully, lock
+the tab. Check both ends of the ribbon.
+
+Confirm the **kernel** sees the sensor:
+
+```bash
+dmesg | grep -i imx708          # => "imx708 10-001a: camera module ID 0x0301"
+ls /dev/v4l-subdev*             # subdev nodes now exist
+media-ctl -d /dev/media4 -p | grep -i imx708   # a "unicam" media device lists imx708
+```
+
+No `imx708` in dmesg + no `unicam` media device = **wrong port or loose ribbon**
+(not a software problem — don't go rebuilding libcamera until the kernel sees it).
+
+### 6.2 Enable the sensor overlay (Ubuntu) ✅
+
+On Ubuntu, `camera_auto_detect=1` is unreliable — load the sensor **explicitly**.
+The boot partition is read-only (§2.4), so unlock it to edit:
+
+```bash
+sudo mount -o remount,rw /boot/firmware
+sudo nano /boot/firmware/config.txt
+```
+
+Set (replacing `camera_auto_detect=1`):
+
+```ini
+camera_auto_detect=0
+dtoverlay=imx708
+```
+
+Re-lock and reboot:
+
+```bash
+sudo mount -o remount,ro /boot/firmware
+sudo reboot
+```
+
+### 6.3 libcamera + rpicam-apps (source build — required for IMX708 on Ubuntu) ✅
+
+Ubuntu's distro libcamera (`0.2.0`) does **not** drive the IMX708. Build the
+Raspberry Pi fork of **libcamera + rpicam-apps** from source — recipe in this
+repo: [`Ubuntu_24_04_LTS_SetupCameraModule3.sh`](Ubuntu_24_04_LTS_SetupCameraModule3.sh).
+It installs libcamera `0.5.x` to `/usr` and `rpicam-vid`/`rpicam-hello` to
+`/usr/local/bin` (the `libcamera-*` names are kept as compat symlinks).
+
+> ⚠️ The script's first line runs `apt full-upgrade`. A big upgrade followed by a
+> power cut is exactly what corrupted this SD card — run the **build** steps but
+> consider **skipping the `full-upgrade`** unless you specifically want it.
+
+> ⚠️ **Fragility to know about:** this source libcamera lives in `/usr`
+> *alongside* the apt libcamera `0.2.0`. An apt upgrade can overwrite the source
+> IPA module `ipa_rpi_vc4.so` (the Pi 4's ISP) with the `0.2.0` one — then
+> libcamera reports **"No cameras available!"** even though the *kernel* sees the
+> sensor. **Fix:** reinstall the source libcamera (fast, no recompile if the
+> build dir survives):
+> ```bash
+> sudo ninja -C ~/libcamera_build/libcamera/build install && sudo ldconfig
+> ```
+> That restores the matching, correctly-signed `0.5.x` IPA. (This is also how we
+> recovered after the SD corruption wiped the `/usr/local/bin/rpicam-*` binaries:
+> `meson compile -C ~/libcamera_build/rpicam-apps/build` then
+> `sudo meson install -C build`.)
+
+Verify libcamera enumerates the camera:
+
+```bash
+rpicam-hello --list-cameras     # => "0 : imx708 [4608x2592 10-bit] ..."
+```
+
+### 6.4 Free the camera from ROS (only one owner at a time) ✅
+
+libcamera allows a **single** process to hold the camera. The robot's ROS2 stack
+auto-starts `ros2_camera_feed.service`, which grabs it — so our pipeline fails
+with *"Pipeline handler in use by another process / failed to acquire camera."*
+For the FPV link, release it:
+
+```bash
+sudo systemctl disable --now ros2_camera_feed.service   # restore later: enable --now
+```
+
+> ⏳ **Open design choice:** the ROS camera feed and the FPV link both want the
+> one camera. Pick one of: a **mode toggle** (run whichever you need), a **single
+> capture that fans out** to both, or one **consuming the other's** stream.
+> Decide before you rely on both at once.
+
+### 6.5 Air-side capture script `~/cam.sh` ✅
+
+Camera → H.264 (HW encode) → RTP → wfb drone input (UDP 5602). The camera is
+mounted upside-down, hence `--rotation 180`. Source of truth:
+[`fpv/cam.sh`](fpv/cam.sh) in this repo (copied to `~/cam.sh` on the RPi4B,
+`chmod +x`).
+
+```bash
+#!/bin/bash
+# Air-side FPV camera capture -> H.264 -> RTP -> wfb-ng drone video (UDP 5602).
+set -e
+WIDTH=1280; HEIGHT=720; FPS=30; BITRATE=4000000   # 4 Mbps; tune for the RF link
+
+rpicam-vid -t 0 --nopreview --rotation 180 \
+  --width "$WIDTH" --height "$HEIGHT" --framerate "$FPS" \
+  --codec h264 --inline --intra "$FPS" --bitrate "$BITRATE" \
+  -o - \
+| gst-launch-1.0 -q -e fdsrc fd=0 \
+  ! h264parse \
+  ! rtph264pay config-interval=1 pt=96 \
+  ! udpsink host=127.0.0.1 port=5602
+```
+
+(`--inline` + `--intra 30` + `config-interval=1` resend SPS/PPS + keyframes so the
+GS can join/recover mid-stream within ~1 s.)
+
+## 7. Daily use — fire up the link ✅
+
+Everything auto-starts at boot **except** the camera capture and the GS viewer
+(those are manual for now — see the auto-start ⏳ item).
+
+1. **Power on both Pis.** wfb-ng starts at boot on both (`wifibroadcast@drone` on
+   the robot, `wifibroadcast@gs` on the GS) — the RF link is up with no action.
+2. **Ground station — start the viewer** on the RPi5 (renders to its attached
+   screen). Source: [`fpv/play.sh`](fpv/play.sh) (copied to `~/play.sh`):
+   ```bash
+   ~/play.sh
+   ```
+3. **Robot — start the camera** (`ssh rpi4b`, then):
+   ```bash
+   ~/cam.sh
+   ```
+
+Live camera appears on the GS screen within ~1–2 s. Ctrl-C either side to stop.
+
+The GS viewer pipeline (`~/play.sh`):
+
+```bash
+#!/bin/bash
+export DISPLAY=:0
+exec gst-launch-1.0 \
+  udpsrc port=5600 caps="application/x-rtp,media=video,encoding-name=H264,payload=96" \
+  ! rtpjitterbuffer latency=50 \
+  ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert \
+  ! autovideosink sync=false
+```
+
+> **Launching from SSH:** start `play.sh` and `cam.sh` in your **own interactive
+> terminals** (an `ssh` session you keep open). Trying to background a persistent
+> GStreamer process *through* a one-shot `ssh '... &'` call tends to drop the
+> SSH channel (exit 255) and the process dies with it. Interactive sessions hold
+> them fine. (The auto-start service below removes this concern entirely.)
+
+**Health check / tuning** (from anywhere with SSH to the GS):
+
+```bash
+ssh rpi5-waverover 'wfb-cli gs'    # live RSSI, pkt/s, FEC, loss
+```
+
+Tune bitrate/resolution/FPS in `~/cam.sh`; FEC / txpower / channel in
+`/etc/wifibroadcast.cfg` (must stay **matched** across both ends — see §4).
+
+> ⏳ **Next session — make it hands-free:** wrap `cam.sh` in a systemd service on
+> the robot (free the camera from ROS first, §6.4) so video streams on power-up,
+> and optionally autostart `play.sh` on the GS desktop. Then you just power the
+> robot and open the viewer.
