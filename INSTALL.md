@@ -284,6 +284,12 @@ make deb
 sudo apt install -y ./deb_dist/wfb-ng_*_arm64.deb
 ```
 
+> Since the 2026-07-02 restructure the vendored tree has no `.git` of its own,
+> so the package builds as version **`0.0.0`** (hermetic — independent of this
+> repo's git state). Fresh install: no difference. **Re**installing over an
+> older, higher-versioned build: apt sees a "downgrade" — add
+> `--allow-downgrades`, or pick a version yourself: `VERSION=1.0 make deb`.
+
 > `python3-all-dev` is required — the generated Debian package build-depends on
 > it (`dpkg-checkbuilddeps: error: unmet build dependencies: python3-all-dev`)
 > and the build aborts without it.
