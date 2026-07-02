@@ -99,12 +99,12 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
   **Goal:** controller migration — Xbox 360 receiver moves to the RPi5, GS
   sends control over the tunnel, RPi4B relays to the ESP32 over UART
   (unchanged). Needs tunnel RTT measured for teleop feasibility.
-- [ ] **12. ⚠️ RPi4B won't boot (2026-07-02 evening) — SD rescue in progress.**
-  Symptom: no mDNS/SSH, no video; GS saw a brief wfb session at 21:27:30
-  (RSSI −38) then nothing → radio comes up, boot never completes: likely
-  boot-loop / root-fs damage on the known-failing card. Plan: pull card,
-  `ddrescue` to an image on the laptop (mapfile!), flash a FRESH card, fsck
-  the copy — never fsck the original.
+- [~] **12. RPi4B "won't boot" → root-caused: SD controller stalls under load.**
+  Not corruption (fsck clean) — the dying card freezes ~90 s into boot under
+  concurrent I/O. **Rescued (ddrescue, 100%) + cloned to a fresh 32 GB card**
+  (file-level, labels+PARTUUIDs matched; INSTALL §8). **Boot test in the robot
+  still PENDING** — close when it streams on power-up. High-endurance card
+  ordered for the permanent fix.
 
 ## Radio wiring reference (BL-M8812EU2)
 
@@ -145,6 +145,39 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-07-02 (night) — RPi4B "dead" → SD rescued + cloned to a fresh 32 GB card
+
+The RPi4B stopped responding (no SSH/mDNS, no video) after a reboot. Turned out
+**not** to be simple corruption:
+
+- **Diagnosis from the image, not guesswork.** ddrescue-imaged the card, mounted
+  the copy read-only, read the journal. The last boot was *healthy* — radio TX
+  up (GS logged the session, RSSI −38), ROS nodes running, `serial_node` talking
+  to the ESP32 — then the journal **stops dead mid-`fpv-cam` camera-init**
+  (libcamera configuring streams). No panic, no shutdown: the system **froze**
+  ~90 s into boot as load ramped (camera + ISP + encoder + radio spinning up).
+  Both filesystems fsck'd **clean**. → the card's **controller stalls under
+  concurrent load** (classic dying-SD endgame: sequential reads fine — that's
+  how the rescue succeeded — but locks up under random I/O). "No WiFi + no video"
+  looked like "won't boot" from outside while ROS actually ran underneath.
+- **Rescue (phase 1):** `ddrescue -n /dev/sdc rpi4b-sd.img rpi4b-sd.map` —
+  **100 % rescued, 0 bad sectors** (slow ~19 MB/s though, itself a dying-card
+  tell). Image kept as a backup (`~/rpi4b-sd-rescue/`, root-owned, ~59 GB file,
+  ~9 GB actually used).
+- **Clone (phase 2):** the only spare was **32 GB** < the 62 GB original, so a
+  raw `dd` was out — did a **file-level clone**. Confirmed boot is **by label**
+  (`cmdline.txt`: `root=LABEL=writable`), so a relabeled fresh card boots.
+  Replicated MBR disk-id `0xfac95764` + partition starts too → **PARTUUIDs
+  match** (`fac95764-01/-02`), plus labels `system-boot`/`writable` and the ext4
+  UUID. rsync'd boot (excluding 624 junk `FSCK*.REC` files) + root. **VERIFY
+  passed**: identities all match, key files present. Procedure runbook now in
+  **INSTALL §8**.
+- **Boot test in the robot: PENDING** (physical). If it streams on power-up, the
+  card was the fault → close item 12; then decide whether to keep the 59 GB
+  image long-term. Ordered a high-endurance card for the permanent fix.
+- Scripts used: `~/rpi4b-sd-rescue/{inspect.sh,clone.sh}` (clone.sh had a
+  typed-`ERASE` gate + a >64 GB refuse-to-run size check). Cleaned up after.
 
 ### 2026-07-02 (evening) — Repo restructured + ARCHITECTURE.md written
 

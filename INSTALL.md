@@ -647,3 +647,48 @@ watch -n2 'sudo cat /proc/net/rtl88x2eu/$(ls /sys/class/net | grep ^wlx)/thermal
 
 > ⏳ **Optional next step:** autostart `play.sh` on the GS desktop too, so the
 > ground station is also zero-touch. (The robot side is done — §6.6.)
+
+## 8. Recovery — rescue + clone the SD card ✅
+
+The robot's SD card gets power-cut by design and wears out (this one corrupted
+its FAT boot partition twice, then started **stalling under load at boot** —
+the radio came up but boot never completed; filesystems fsck'd clean, so it was
+the card's controller failing, not the data). The fix is a two-phase clone: a
+**read-only rescue image** of the dying card, then a **file-level copy** onto a
+fresh card. File-level (not raw `dd`) means the target can be *smaller* than the
+original (we cloned a 62 GB card onto a 32 GB one — only ~9 GB was in use).
+
+**Phase 1 — image the dying card** (on a Linux host with a card reader). Insert
+the card, find its device with `lsblk` (here `/dev/sdX` — **verify it's the
+card, not a system disk**), unmount its partitions, then:
+
+```bash
+sudo ddrescue -n /dev/sdX rescue.img rescue.map    # pass 1: sequential, logs bad sectors
+ddrescuelog -t rescue.map                          # check: rescued % / bad-sector count
+# if any bad sectors: sudo ddrescue -d -r3 /dev/sdX rescue.img rescue.map  (retry passes)
+```
+
+Keep `rescue.img` as a backup even after cloning. `ddrescue` never gives up on
+a weak card the way `dd` does, and the mapfile lets it resume.
+
+**Phase 2 — clone onto a fresh card.** Ubuntu-on-Pi boots **by label**
+(`cmdline.txt` has `root=LABEL=writable`; fstab uses `LABEL=writable` +
+`LABEL=system-boot`), so a fresh card only needs matching **labels** to boot.
+We also replicate the MBR disk-id and partition start sectors so the
+**PARTUUIDs match too** — belt and suspenders. The steps (run against the image
+via a loop device, `losetup -fP`):
+
+1. `sfdisk` the new card: MBR `label-id: 0xfac95764`, p1 `start=2048,
+   size=1048576, type=c, bootable`, p2 `start=1050624, type=83`.
+2. `mkfs.vfat -F 32 -n system-boot -i D595E956` on p1;
+   `mkfs.ext4 -L writable -U <orig-uuid>` on p2.
+3. `rsync -rt --exclude 'FSCK*.REC'` the boot partition (drops FAT-corruption
+   junk), `rsync -aHAXx --numeric-ids` the root.
+4. Verify `blkid` (PARTUUIDs/labels match), key files exist, then `sync` +
+   unmount.
+
+> The exact scripted procedure used on 2026-07-02 (`inspect.sh` + `clone.sh`,
+> with a typed-`ERASE` safety gate and a size check that refuses disks >64 GB)
+> is in the SETUP_LOG journal for that date. **Long-term:** use a
+> **high-endurance** card (SanDisk High Endurance / Samsung PRO Endurance) —
+> built for the dashcam-style power-cut abuse a robot inflicts.
