@@ -132,6 +132,22 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 
 ## Journal
 
+### 2026-07-02 (evening) — Repo restructured + ARCHITECTURE.md written
+
+- **Repo cleanup:** the upstream wfb-ng tree (copied to the repo root on
+  2026-06-04) moved to `third_party/wfb-ng/` with a `VENDOR.md`, matching the
+  existing `third_party/rtl8812eu/` pattern. Dropped upstream `docker/`,
+  `openwrt/`, `.github/` (unused; noted in VENDOR.md). Our files now own the
+  root: README (rewritten), INSTALL, SETUP_LOG, ARCHITECTURE, `fpv/`,
+  `docs/hardware/`. INSTALL build paths updated (`make deb` now runs in
+  `third_party/wfb-ng/`). ⚠️ **The Pi clones predate this** — `git pull` on
+  both Pis before the next rebuild, paths moved.
+- **`ARCHITECTURE.md`**: layer-by-layer educational doc (radio silicon →
+  driver/injection → wfb-ng transport → video path → RF budget → debugging
+  crib sheet), grounded in the vendored source (crypto = ChaCha20-Poly1305 +
+  crypto_box sessions, FEC = Zfex erasure code, the "WB" MAC-address
+  addressing trick, radiotap per-packet rate control).
+
 ### 2026-07-02 (later) — Hands-free robot: `fpv-cam.service`, verified through a power cycle
 
 - `cam.sh` now runs as **`fpv-cam.service`** on the RPi4B (repo:
