@@ -81,13 +81,18 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
   `fpv/`). Also hardened the SD against power cuts (read-only `/boot/firmware`). ✅
 - [ ] **8. Make it hands-free** — `cam.sh` as a systemd service (auto-stream on
   power-up); resolve ROS-camera vs FPV coexistence; optional GS autostart.
-- [ ] **9. Reduce glass-to-glass latency** — currently ~1–2 s (fine for a land
-  robot, but a tuned wfb link is <200 ms). **Confirmed stable, not growing** →
-  it's **fixed decode/display buffering on the GS**, not queue accumulation (rules
-  out the air side / RF). First moves are GS-only: force a low-latency sink
-  (`glimagesink`/`kmssink`, `sync=false`) instead of `autovideosink`, put
-  `avdec_h264` in low-delay/no-reorder mode, add `queue leaky=downstream
-  max-size-buffers=1` before the sink. (Encoder GOP is a secondary lever.)
+- [ ] **9. Reduce glass-to-glass latency** — **correction (2026-07-02): it DOES
+  grow, then seems to plateau.** Fresh start ≈ imperceptible; after a while it
+  settles around ~900 ms–1 s (rough stopwatch; runs were short, so "plateau"
+  is tentative). Restarting `cam.sh` resets it. Caveat: a TX restart also resets
+  the GS `rtpjitterbuffer` (new SSRC/timestamp base), so this doesn't localize
+  the growth yet. A plateau points at a **bounded buffer filling and staying
+  full** (consumer marginally slower than producer), not clock drift.
+  **Discriminating test next time it's slow: restart `play.sh` only** — if
+  latency drops, it's GS-side (udpsrc socket buffer / jitterbuffer); if not,
+  it's air-side (rpicam→gst pipe + encoder queue). Bounded-latency insurance
+  either way: `rtpjitterbuffer drop-on-latency=true` + `queue leaky=downstream
+  max-size-buffers=1` before the sink.
 - [ ] **10. Mount on the robot** — antennas, power, range. Clone SD to a fresh card.
 
 ## Radio wiring reference (BL-M8812EU2)
@@ -129,6 +134,34 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-07-02 — Latency verdict revised: it creeps up to ~1 s, then plateaus
+
+Fresh observations from today's session (link restarted after 4 days off):
+
+- **On a fresh start the latency is near-imperceptible** — the committed
+  `play.sh` (jitterbuffer 50 ms, `sync=false`) does behave low-latency, so the
+  06-28 "~1–2 s" figure was *not* the pipeline's steady floor.
+- **But it creeps:** after running a while it measured ~900 ms–1 s by a rough
+  stopwatch test, and **seems to level off there** rather than grow without
+  bound (caveat: runs were short — plateau not yet proven on a long run).
+- **Restarting `cam.sh` (air side only) snapped it back to fast.** Tempting to
+  blame the air side, but inconclusive: a TX restart gives the stream a new
+  SSRC/timestamp base, which **also resets the GS `rtpjitterbuffer`** — so this
+  experiment resets *both* ends' state at once.
+- **Reading of the shape:** growth-to-a-ceiling is the signature of a **bounded
+  buffer that fills and stays full** — a consumer running marginally slower
+  than the producer until some queue hits capacity. Candidates: GS `udpsrc`
+  kernel socket buffer, the jitterbuffer, or (air) the `rpicam-vid → gst` pipe
+  + encoder queue. Pure clock drift is now less likely (drift doesn't plateau).
+- **Next probe (cheap, decisive): when it's slow again, restart `play.sh`
+  ONLY.** Latency drops → GS-side; stays → air-side.
+- **Fix to apply regardless** (bounds latency no matter which buffer it is):
+  `rtpjitterbuffer latency=50 drop-on-latency=true` and a
+  `queue leaky=downstream max-size-buffers=1` right before the sink in
+  `play.sh`.
+- Also revised plan item 9 accordingly (the "stable, not growing" conclusion
+  from 06-28 was wrong — it was measured too early in the growth curve).
 
 ### 2026-06-28 (later) — 🎥 REAL CAMERA over the link + SD card made power-cut-proof
 
