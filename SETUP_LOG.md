@@ -91,6 +91,20 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
   journal). Fix: `udpsink sync=false`. **Verified by a 15-min soak — stays as
   fast as at start** (creep previously showed well within that window). ✅
 - [ ] **10. Mount on the robot** — antennas, power, range. Clone SD to a fresh card.
+- [ ] **11. Test the wfb IP tunnel** (started 2026-07-02, aborted when the RPi4B
+  died mid-test). Findings so far: GS end is `gs-wfb` = `10.5.0.1/24`, up;
+  ping to assumed drone `10.5.0.2` got no reply **but the robot was down** —
+  retest once it's back, and find the drone's actual tunnel IP
+  (`ip -brief addr` on the RPi4B / `[drone_tunnel]` in its wifibroadcast.cfg).
+  **Goal:** controller migration — Xbox 360 receiver moves to the RPi5, GS
+  sends control over the tunnel, RPi4B relays to the ESP32 over UART
+  (unchanged). Needs tunnel RTT measured for teleop feasibility.
+- [ ] **12. ⚠️ RPi4B won't boot (2026-07-02 evening) — SD rescue in progress.**
+  Symptom: no mDNS/SSH, no video; GS saw a brief wfb session at 21:27:30
+  (RSSI −38) then nothing → radio comes up, boot never completes: likely
+  boot-loop / root-fs damage on the known-failing card. Plan: pull card,
+  `ddrescue` to an image on the laptop (mapfile!), flash a FRESH card, fsck
+  the copy — never fsck the original.
 
 ## Radio wiring reference (BL-M8812EU2)
 
