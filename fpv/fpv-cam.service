@@ -1,0 +1,25 @@
+# FPV camera autostart for the RPi4B (air side).
+# Deploy: sudo install -m644 fpv-cam.service /etc/systemd/system/ then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fpv-cam
+# See INSTALL.md §6.5. Runs ~/cam.sh (source of truth: fpv/cam.sh in repo).
+#
+# NOTE: the camera is single-owner — this conflicts with any ROS camera feed
+# (ros2_camera_feed.service stays disabled; coexistence design deferred).
+
+[Unit]
+Description=FPV camera stream (cam.sh) -> wfb-ng drone video
+# Soft ordering only: udpsink to localhost:5602 works even if wfb_tx isn't up
+# yet (packets just drop), but starting after it avoids a burst of lost video.
+After=wifibroadcast@drone.service
+# Never give up: at early boot the camera stack may not be ready for the first
+# few attempts; keep retrying (robot has no keyboard to rescue it).
+StartLimitIntervalSec=0
+
+[Service]
+User=blankmcu
+ExecStart=/home/blankmcu/cam.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

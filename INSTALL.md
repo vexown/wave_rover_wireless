@@ -548,30 +548,58 @@ GS can join/recover mid-stream within ~1 s.)
 > (symptom: `rpicam-vid` blocked in `pipe_write`, all socket queues empty).
 > Same reason `play.sh` sets `sync=false` on its display sink.
 
+### 6.6 Auto-start the camera at boot (`fpv-cam.service`) ✅
+
+The robot streams video on power-up — no SSH needed. Source of truth:
+[`fpv/fpv-cam.service`](fpv/fpv-cam.service); it runs `~/cam.sh` as user
+`blankmcu`, ordered after `wifibroadcast@drone`, and retries forever
+(`Restart=always`, `StartLimitIntervalSec=0`) so an early-boot "camera not
+ready yet" or a mid-drive pipeline death self-heals in ~2 s.
+
+```bash
+# on the RPi4B (air side):
+scp fpv/fpv-cam.service rpi4b:/tmp/
+ssh rpi4b
+sudo install -m644 /tmp/fpv-cam.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fpv-cam.service
+```
+
+**Verified against a full power cycle** (hard cut, the way the robot is
+actually used): video reappears on the GS by itself.
+
+- The camera is **single-owner** (§6.4): this service and
+  `ros2_camera_feed.service` must not both be enabled. Current decision:
+  **FPV-only** — the ROS feed stays disabled; coexistence design deferred.
+- To hand the camera back to ROS temporarily:
+  `sudo systemctl disable --now fpv-cam && sudo systemctl enable --now ros2_camera_feed`
+  (and the reverse to return).
+- Pipeline tweaks stay in the repo script: edit `fpv/cam.sh`, `scp` to
+  `rpi4b:~/cam.sh`, then `sudo systemctl restart fpv-cam`.
+
 ## 7. Daily use — fire up the link ✅
 
-Everything auto-starts at boot **except** the camera capture and the GS viewer
-(those are manual for now — see the auto-start ⏳ item).
+The whole air side is hands-free: power the robot and it streams
+(`wifibroadcast@drone` + `fpv-cam.service`, §6.6). Only the GS viewer is manual.
 
-1. **Power on both Pis.** wfb-ng starts at boot on both (`wifibroadcast@drone` on
-   the robot, `wifibroadcast@gs` on the GS) — the RF link is up with no action.
+1. **Power on both Pis.** wfb-ng starts at boot on both ends, and the robot's
+   camera service starts streaming by itself (~15–30 s after power-on).
 2. **Ground station — start the viewer** on the RPi5 (renders to its attached
    screen). Source: [`fpv/play.sh`](fpv/play.sh) (copied to `~/play.sh`):
    ```bash
    ~/play.sh
    ```
-3. **Robot — start the camera** (`ssh rpi4b`, then):
-   ```bash
-   ~/cam.sh
-   ```
 
-Live camera appears on the GS screen within ~1–2 s. Ctrl-C either side to stop.
+Live camera appears on the GS screen. Ctrl-C to stop the viewer. If the window
+hasn't opened yet, the robot is still booting — `play.sh` prints a "listening
+on UDP 5600" line so an empty screen isn't mistaken for a broken link.
 
 The GS viewer pipeline (`~/play.sh`):
 
 ```bash
 #!/bin/bash
 export DISPLAY=:0
+echo "play.sh: listening on UDP 5600 — window opens when video arrives (robot booted?)"
 exec gst-launch-1.0 \
   udpsrc port=5600 caps="application/x-rtp,media=video,encoding-name=H264,payload=96" \
   ! rtpjitterbuffer latency=50 \
@@ -579,11 +607,11 @@ exec gst-launch-1.0 \
   ! autovideosink sync=false
 ```
 
-> **Launching from SSH:** start `play.sh` and `cam.sh` in your **own interactive
-> terminals** (an `ssh` session you keep open). Trying to background a persistent
-> GStreamer process *through* a one-shot `ssh '... &'` call tends to drop the
-> SSH channel (exit 255) and the process dies with it. Interactive sessions hold
-> them fine. (The auto-start service below removes this concern entirely.)
+> **Launching from SSH:** start `play.sh` in your **own interactive terminal**
+> (an `ssh` session you keep open). Trying to background a persistent GStreamer
+> process *through* a one-shot `ssh '... &'` call tends to drop the SSH channel
+> (exit 255) and the process dies with it. Interactive sessions hold it fine.
+> (`cam.sh` no longer has this concern — it runs as a systemd service, §6.6.)
 
 **Health check / tuning** (from anywhere with SSH to the GS):
 
@@ -611,7 +639,5 @@ watch -n2 'sudo cat /proc/net/rtl88x2eu/$(ls /sys/class/net | grep ^wlx)/thermal
   actually validates cooling for flying. Log a temp at each power level during
   range testing.
 
-> ⏳ **Next session — make it hands-free:** wrap `cam.sh` in a systemd service on
-> the robot (free the camera from ROS first, §6.4) so video streams on power-up,
-> and optionally autostart `play.sh` on the GS desktop. Then you just power the
-> robot and open the viewer.
+> ⏳ **Optional next step:** autostart `play.sh` on the GS desktop too, so the
+> ground station is also zero-touch. (The robot side is done — §6.6.)

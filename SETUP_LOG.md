@@ -79,8 +79,12 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
 - [x] **7. Wire in real Camera Module 3** pipeline on the RPi4B — **LIVE**: IMX708
   → H.264 → RTP → wfb → GS screen, smooth 720p30 (`~/cam.sh` + `~/play.sh`, in
   `fpv/`). Also hardened the SD against power cuts (read-only `/boot/firmware`). ✅
-- [ ] **8. Make it hands-free** — `cam.sh` as a systemd service (auto-stream on
-  power-up); resolve ROS-camera vs FPV coexistence; optional GS autostart.
+- [x] **8. Make it hands-free** — **DONE 2026-07-02**: `fpv-cam.service` on the
+  RPi4B (Restart=always, StartLimitIntervalSec=0, After=wifibroadcast@drone);
+  **verified through a full power cycle** — video reappears on the GS unaided.
+  Coexistence decision: **FPV-only for now** (ROS feed stays disabled; fan-out
+  design deferred until ROS vision is actually needed). Optional GS `play.sh`
+  autostart still open (⏳). ✅
 - [x] **9. Reduce glass-to-glass latency** — **FIXED 2026-07-02**: latency crept
   from ~0 to a ~1 s plateau because `udpsink` in `cam.sh` defaulted to
   `sync=true` and paced packets to h264parse's idealized-30fps timestamps (see
@@ -127,6 +131,27 @@ Refs: [manual](https://manuals.plus/ae/1005007098141054) ·
 ---
 
 ## Journal
+
+### 2026-07-02 (later) — Hands-free robot: `fpv-cam.service`, verified through a power cycle
+
+- `cam.sh` now runs as **`fpv-cam.service`** on the RPi4B (repo:
+  `fpv/fpv-cam.service`, INSTALL §6.6). Design: `After=wifibroadcast@drone`
+  (soft ordering), `Restart=always` + `RestartSec=2` +
+  `StartLimitIntervalSec=0` — never gives up, so early-boot "camera not ready"
+  or a mid-drive pipeline death self-heals; no keyboard on the robot needed.
+- **Verified the way that matters: full power cycle (hard cut).** Video came
+  back on the GS monitor unaided.
+- **Coexistence decision: FPV-only for now.** `ros2_camera_feed.service` stays
+  disabled; the fan-out/mode-toggle design is deferred until ROS vision is
+  actually needed (options documented in INSTALL §6.4).
+- `play.sh` now prints a "listening on UDP 5600 — window opens when video
+  arrives" line at startup, so an empty screen while the robot boots (~15–30 s)
+  isn't mistaken for a broken link.
+- Deploy gotcha (self-inflicted): `pkill -f "bash ./cam.sh"` over SSH matched
+  the **remote shell's own command line** and killed the session (exit 255),
+  orphaning `rpicam-vid` which kept the camera busy. Use `pkill -x <name>` or
+  exact PIDs when the pattern could appear in your own invocation.
+- Remaining from item 8: optional GS autostart of `play.sh` (⏳).
 
 ### 2026-07-02 — Latency verdict revised: it creeps up to ~1 s, then plateaus
 
