@@ -95,7 +95,7 @@ sudo apt install -y build-essential libpcap-dev libsodium-dev libevent-dev \
   fakeroot lsb-release python3-twisted python3-pyroute2 python3-msgpack \
   python3-jinja2 python3-yaml python3-serial python3-future
 
-cd ~/wave_rover_wireless
+cd ~/wave_rover_wireless/third_party/wfb-ng    # vendored wfb-ng (see its VENDOR.md)
 make deb
 sudo apt install -y ./deb_dist/wfb-ng_*_arm64.deb     # package tagged 0~noble
 ```
@@ -276,7 +276,7 @@ sudo apt install -y build-essential libpcap-dev libsodium-dev libevent-dev \
   python3-jinja2 python3-yaml python3-serial python3-future
 
 # Build the .deb (compiles the C binaries, then packages via stdeb — needs internet)
-cd ~/wave_rover_wireless
+cd ~/wave_rover_wireless/third_party/wfb-ng    # vendored wfb-ng (see its VENDOR.md)
 make deb
 
 # Install it via apt (pulls runtime deps like socat). Ignore the harmless
@@ -471,7 +471,7 @@ sudo reboot
 
 Ubuntu's distro libcamera (`0.2.0`) does **not** drive the IMX708. Build the
 Raspberry Pi fork of **libcamera + rpicam-apps** from source — recipe in this
-repo: [`Ubuntu_24_04_LTS_SetupCameraModule3.sh`](Ubuntu_24_04_LTS_SetupCameraModule3.sh).
+repo: [`fpv/setup-camera-ubuntu-24.04.sh`](fpv/setup-camera-ubuntu-24.04.sh).
 It installs libcamera `0.5.x` to `/usr` and `rpicam-vid`/`rpicam-hello` to
 `/usr/local/bin` (the `libcamera-*` names are kept as compat symlinks).
 
