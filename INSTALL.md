@@ -535,11 +535,18 @@ rpicam-vid -t 0 --nopreview --rotation 180 \
 | gst-launch-1.0 -q -e fdsrc fd=0 \
   ! h264parse \
   ! rtph264pay config-interval=1 pt=96 \
-  ! udpsink host=127.0.0.1 port=5602
+  ! udpsink host=127.0.0.1 port=5602 sync=false
 ```
 
 (`--inline` + `--intra 30` + `config-interval=1` resend SPS/PPS + keyframes so the
 GS can join/recover mid-stream within ~1 s.)
+
+> ⚠️ **`udpsink sync=false` is load-bearing.** Without it, udpsink (default
+> `sync=true`) paces packets against h264parse's idealized-30fps timestamps;
+> the real sensor runs a hair slower, so the per-packet wait compounds and
+> glass-to-glass latency creeps from ~0 to a ~1 s plateau over minutes
+> (symptom: `rpicam-vid` blocked in `pipe_write`, all socket queues empty).
+> Same reason `play.sh` sets `sync=false` on its display sink.
 
 ## 7. Daily use — fire up the link ✅
 

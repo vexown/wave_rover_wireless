@@ -6,6 +6,10 @@
 #   --inline       : put SPS/PPS in-stream so the GS can join mid-stream
 #   --intra 30     : keyframe every 30 frames (~1s @30fps) for fast recovery
 #   config-interval=1 : resend SPS/PPS every second on the RTP side too
+#   udpsink sync=false : send packets immediately. With the default sync=true,
+#     udpsink paces buffers to h264parse's idealized-30fps timestamps; the real
+#     camera runs a hair slower, so the wait grows -> latency creeps to ~1s
+#     (rpicam-vid ends up blocked in pipe_write). Diagnosed 2026-07-02.
 set -e
 
 WIDTH=1280
@@ -20,4 +24,4 @@ rpicam-vid -t 0 --nopreview --rotation 180 \
 | gst-launch-1.0 -q -e fdsrc fd=0 \
   ! h264parse \
   ! rtph264pay config-interval=1 pt=96 \
-  ! udpsink host=127.0.0.1 port=5602
+  ! udpsink host=127.0.0.1 port=5602 sync=false

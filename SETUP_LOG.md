@@ -81,18 +81,11 @@ ROBOT (RPi4B / drone profile)                  GROUND (RPi5 / gs profile)
   `fpv/`). Also hardened the SD against power cuts (read-only `/boot/firmware`). ✅
 - [ ] **8. Make it hands-free** — `cam.sh` as a systemd service (auto-stream on
   power-up); resolve ROS-camera vs FPV coexistence; optional GS autostart.
-- [ ] **9. Reduce glass-to-glass latency** — **correction (2026-07-02): it DOES
-  grow, then seems to plateau.** Fresh start ≈ imperceptible; after a while it
-  settles around ~900 ms–1 s (rough stopwatch; runs were short, so "plateau"
-  is tentative). Restarting `cam.sh` resets it. Caveat: a TX restart also resets
-  the GS `rtpjitterbuffer` (new SSRC/timestamp base), so this doesn't localize
-  the growth yet. A plateau points at a **bounded buffer filling and staying
-  full** (consumer marginally slower than producer), not clock drift.
-  **Discriminating test next time it's slow: restart `play.sh` only** — if
-  latency drops, it's GS-side (udpsrc socket buffer / jitterbuffer); if not,
-  it's air-side (rpicam→gst pipe + encoder queue). Bounded-latency insurance
-  either way: `rtpjitterbuffer drop-on-latency=true` + `queue leaky=downstream
-  max-size-buffers=1` before the sink.
+- [x] **9. Reduce glass-to-glass latency** — **FIXED 2026-07-02**: latency crept
+  from ~0 to a ~1 s plateau because `udpsink` in `cam.sh` defaulted to
+  `sync=true` and paced packets to h264parse's idealized-30fps timestamps (see
+  journal). Fix: `udpsink sync=false`. **Verified by a 15-min soak — stays as
+  fast as at start** (creep previously showed well within that window). ✅
 - [ ] **10. Mount on the robot** — antennas, power, range. Clone SD to a fresh card.
 
 ## Radio wiring reference (BL-M8812EU2)
@@ -154,14 +147,28 @@ Fresh observations from today's session (link restarted after 4 days off):
   than the producer until some queue hits capacity. Candidates: GS `udpsrc`
   kernel socket buffer, the jitterbuffer, or (air) the `rpicam-vid → gst` pipe
   + encoder queue. Pure clock drift is now less likely (drift doesn't plateau).
-- **Next probe (cheap, decisive): when it's slow again, restart `play.sh`
-  ONLY.** Latency drops → GS-side; stays → air-side.
-- **Fix to apply regardless** (bounds latency no matter which buffer it is):
-  `rtpjitterbuffer latency=50 drop-on-latency=true` and a
-  `queue leaky=downstream max-size-buffers=1` right before the sink in
-  `play.sh`.
-- Also revised plan item 9 accordingly (the "stable, not growing" conclusion
-  from 06-28 was wrong — it was measured too early in the growth curve).
+- **Probe 1 — restart `play.sh` only while slow: NO effect.** Delay survives a
+  full GS pipeline rebuild (fresh udpsrc socket + jitterbuffer) → **air side**.
+- **Probe 2 — where's the queue?** All candidate byte-queues were **empty**
+  while the video ran ~1 s behind: `wfb_tx` UDP 5602 Recv-Q = 0, qdisc backlog
+  0, packet-socket Send-Q/Rmem 0 on *both* ends, radio at 44–47 °C (no thermal
+  throttle), CPUs healthy (rpicam-vid 40 %, GS decode 26 %). So the delay was
+  not standing bytes in any socket — something was *pacing* the flow.
+- **Smoking gun:** thread wait-channel sampling on the RPi4B showed
+  `rpicam-vid` blocked in **`pipe_write`** every sample — the encoder is being
+  backpressured by the gst side. Root cause: **`udpsink` defaults to
+  `sync=true`** — it holds each packet until the pipeline clock reaches the
+  buffer timestamp. `h264parse` stamps frames at an idealized 30 fps; the real
+  sensor delivers a hair slower, so timestamps drift ahead of the clock and the
+  per-packet wait grows without bound. The visible ~1 s "plateau" is just the
+  pipe + camera buffer pool saturating; the *pacing* debt keeps growing.
+  (`play.sh` always had `sync=false` on its sink — the send side never did.)
+- **Fix: `udpsink ... sync=false` in `cam.sh`** (one word). Deployed to the
+  RPi4B as `~/cam.sh`. **VERIFIED: 15-minute soak, latency still as low as at
+  fresh start** (previously the creep was obvious well within that window).
+  Promoted to INSTALL §6.5.
+- Also revised plan item 9 (the "stable, not growing" conclusion from 06-28
+  was wrong — it was measured too early in the growth curve).
 
 ### 2026-06-28 (later) — 🎥 REAL CAMERA over the link + SD card made power-cut-proof
 
